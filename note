@@ -1,0 +1,2 @@
+get_voices() loop over notes and check their footnote to mark their instrument and part
+- percussions notes are unpitched objects  
