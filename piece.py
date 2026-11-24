@@ -1,10 +1,8 @@
 from importlib.resources import path
 import xml.etree.ElementTree as ET
-from fractions import Fraction
-from music21 import converter
+from music21 import converter, pitch
 import warnings
 from pprint import pprint
-from pathlib import Path
 import pandas as pd
 
 
@@ -18,6 +16,7 @@ class Piece:
         self.voices = self._get_voices()
         self.transpose = self._check_transpose()
         self.notes, self.measure_mark = self.get_notes()
+        self.starting_point_suggestion = self.get_starting_point_suggestion()
         # self.R = self.get_R()
 
 
@@ -39,9 +38,7 @@ class Piece:
 
 
     def _get_voices(self):
-        #change into loop over self.score instead
         voices = []
-
         for el in self.score.recurse().getElementsByClass(['Note', 'Chord']):
             part = el.getInstrument(returnDefault=False).partId
             voice = el.notes[0].editorial.footnotes[0].text if el.isChord else el.editorial.footnotes[0].text
@@ -131,12 +128,14 @@ class Piece:
     #NaN for no notes
     def get_notes(self):
 
-        max_measure = max([int(c.get('number')) for c in self.root.findall('.//measure')])
-        min_measure = min([int(c.get('number')) for c in self.root.findall('.//measure')])
+        
+        max_measure = max([int(c.get('number')) for c in self.root.findall('.//measure') if c.get('number').isdigit()])
+        min_measure = min([int(c.get('number')) for c in self.root.findall('.//measure') if c.get('number').isdigit()])
+
         
         keys = {voice_part:n for n, (voice_part, _) in enumerate(self.voices)}
         measure_mark = {}
-        columns = [voice_part for voice_part, _ in self.voices] #so colum does not include set
+        columns = [voice_part for voice_part, _ in self.voices] #so column does not include set
         notes = []
         # notes.append([0] * len(self.voices))
         labels = []
@@ -167,9 +166,8 @@ class Piece:
         return self._get_notes_in_measure(measure_number)
 
     #return the starting point (closet tonic to each voice)
-    def get_key_suggestion(self, d = 12):
-        notes = self.notes.ffill() #fill each NaN with the previous value. since the first row are zeros, every spot is filled
-        medians = notes.median()    #takes each (p1,1) and find median of each column after all the NaN was filled
+    def get_starting_point_suggestion(self, d = 12):
+        medians = self.notes.median()    #takes each (p1,1) and find median of each column after all the NaN was filled
         tonic = self.score.analyze('key').tonic.midi #analyze key gives most time
         tonics = [i*12 + (tonic % d) for i in range((200//d))]
         recommendations = []
@@ -181,16 +179,37 @@ class Piece:
 
         return recommendations
 
-#527369
-    def get_R(self):
-        notes = self.notes
-        voices = self.voices
-        score = self.score
-        print(score.analyze('key'))
+# returns data where each voice is transposed according to the starting point, if d is passed then return modded
+    def get_R(self, starting_points):
+        #the following creates a DataFrame with columns = ('P1', '1') and values = starting=points
+        basepoints = pd.DataFrame([pitch.midi for pitch in starting_points.values()]).T
+        basepoints.columns = list(starting_points.keys()) 
+
+        #the data in this dataframe is midi number not, on the R.
+        R_midi = pd.concat([basepoints, self.notes], ignore_index = False)
+
+        #minus the start point so each point becomes relative to the origin
+        R = (R_midi - R_midi.loc[0]).ffill()
+
+        #debugging purpose, this prints nameWithOctaves for verification of notes!!
+        #print('NOTES')
+        # with pd.option_context('display.max_rows', None, 'display.max_columns', None, 'display.width', 1000):
+        #     print(R_midi.map(lambda m: pitch.Pitch(midi=int(m)).nameWithOctave, na_action='ignore'))
         
-        notes[0] = [0 for _ in voices]
-        r = pd.DataFrame(notes).ffill()
-        # pprint(r)
+        return R
+
+    def get_R_total(self, R):
+        return R.sum(axis = 1, numeric_only = True).to_frame(name='total_movements')
+
+    #this function gives the amount of loops each voice has
+    def get_loops(self, R, d = 12):
+        loops = pd.DataFrame()
+        loops = R.where(abs(R) >= d, other = 0) // 12
+        loops['total_loops'] = loops.sum(axis=1, numeric_only = True)
+        return loops
+        
+
+
 
 '''
 part = instrument
